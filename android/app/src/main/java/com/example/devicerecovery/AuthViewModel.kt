@@ -7,52 +7,32 @@ import kotlinx.coroutines.launch
 class AuthViewModel : ViewModel() {
     private val service = RetrofitClient.create().create(AuthApiService::class.java)
 
-    fun register(
-        email: String,
-        password: String,
-        onSuccess: () -> Unit,
-        onError: (String) -> Unit
-    ) {
-        if (email.isBlank() || password.isBlank()) {
-            onError("Email and password are required")
-            return
-        }
-
-        viewModelScope.launch {
-            try {
-                val response = service.register(RegisterRequest(email.trim(), password))
-                if (response.access_token.isNotBlank()) {
-                    onSuccess()
-                } else {
-                    onError("Registration failed")
-                }
-            } catch (e: Exception) {
-                onError(e.localizedMessage ?: "Registration failed")
-            }
-        }
+    fun register(email: String, password: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        submit(email, password, onSuccess, onError) { service.register(RegisterRequest(email.trim(), password)) }
     }
 
-    fun login(
+    fun login(email: String, password: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+        submit(email, password, onSuccess, onError) { service.login(LoginRequest(email.trim(), password)) }
+    }
+
+    private fun submit(
         email: String,
         password: String,
-        onSuccess: () -> Unit,
-        onError: (String) -> Unit
+        onSuccess: (String) -> Unit,
+        onError: (String) -> Unit,
+        request: suspend () -> AuthResponse,
     ) {
-        if (email.isBlank() || password.isBlank()) {
-            onError("Email and password are required")
+        if (email.isBlank() || password.length < 8) {
+            onError("Enter a valid email and a password of at least 8 characters")
             return
         }
-
         viewModelScope.launch {
             try {
-                val response = service.login(LoginRequest(email.trim(), password))
-                if (response.access_token.isNotBlank()) {
-                    onSuccess()
-                } else {
-                    onError("Login failed")
-                }
+                val response = request()
+                if (response.access_token.isNotBlank()) onSuccess(response.access_token)
+                else onError("Authentication failed")
             } catch (e: Exception) {
-                onError(e.localizedMessage ?: "Login failed")
+                onError(e.localizedMessage ?: "Network request failed")
             }
         }
     }
