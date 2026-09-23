@@ -1,5 +1,6 @@
 package com.example.devicerecovery
 
+import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +17,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,9 +36,9 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var sessionManager: SessionManager
 
-    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        sessionManager = SessionManager(this)
+        sessionManager = SessionManager(applicationContext)
 
         setContent {
             MaterialTheme {
@@ -49,69 +51,91 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun DeviceRecoveryApp(sessionManager: SessionManager) {
     val navController = rememberNavController()
-    val startDestination = if (sessionManager.getToken() != null) "devices" else "welcome"
+    val startDestination = if (sessionManager.getToken().isNullOrBlank()) "welcome" else "devices"
 
     NavHost(navController = navController, startDestination = startDestination) {
-        composable("welcome") {
-            WelcomeScreen(navController)
-        }
-        composable("register") {
-            RegisterScreen(navController, sessionManager)
-        }
-        composable("login") {
-            LoginScreen(navController, sessionManager)
-        }
-        composable("devices") {
-            DeviceListScreen(navController, sessionManager)
-        }
+        composable("welcome") { WelcomeScreen(navController) }
+        composable("register") { RegisterScreen(navController, sessionManager) }
+        composable("login") { LoginScreen(navController, sessionManager) }
+        composable("devices") { DeviceManagementScreen(navController, sessionManager) }
     }
 }
 
 @Composable
-fun WelcomeScreen(navController: NavHostController) {
+private fun WelcomeScreen(navController: NavHostController) {
     Scaffold { padding ->
         Surface(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(24.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .padding(24.dp),
                 verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text("Device Recovery Starter", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    text = "Consent-based lost-device recovery",
-                    modifier = Modifier.padding(top = 12.dp, bottom = 24.dp)
+                    "Consent-based lost-device recovery",
+                    modifier = Modifier.padding(top = 12.dp, bottom = 24.dp),
                 )
-
                 Button(
                     onClick = { navController.navigate("register") },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Create account")
-                }
-
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Create account") }
                 Button(
                     onClick = { navController.navigate("login") },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 12.dp)
-                ) {
-                    Text("Login")
-                }
+                        .padding(top = 12.dp),
+                ) { Text("Login") }
             }
         }
     }
 }
 
 @Composable
-fun RegisterScreen(
+private fun RegisterScreen(navController: NavHostController, sessionManager: SessionManager) {
+    AuthScreen(
+        title = "Create account",
+        actionLabel = "Register",
+        viewModel = remember { AuthViewModel() },
+        onSubmit = { email, password, onSuccess, onError ->
+            rememberAuthRegistration(email, password, onSuccess, onError)
+        },
+        onAuthenticated = { token ->
+            sessionManager.saveToken(token)
+            navController.navigate("devices") { popUpTo("welcome") { inclusive = true } }
+        },
+        navController = navController,
+    )
+}
+
+@Composable
+private fun LoginScreen(navController: NavHostController, sessionManager: SessionManager) {
+    AuthScreen(
+        title = "Login",
+        actionLabel = "Login",
+        viewModel = remember { AuthViewModel() },
+        onSubmit = { email, password, onSuccess, onError ->
+            rememberAuthLogin(email, password, onSuccess, onError)
+        },
+        onAuthenticated = { token ->
+            sessionManager.saveToken(token)
+            navController.navigate("devices") { popUpTo("welcome") { inclusive = true } }
+        },
+        navController = navController,
+    )
+}
+
+@Composable
+private fun AuthScreen(
+    title: String,
+    actionLabel: String,
+    viewModel: AuthViewModel,
+    onSubmit: (@Composable (String, String, (String) -> Unit, (String) -> Unit) -> Unit),
+    onAuthenticated: (String) -> Unit,
     navController: NavHostController,
-    sessionManager: SessionManager
 ) {
-    val viewModel = remember { AuthViewModel() }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
@@ -124,177 +148,100 @@ fun RegisterScreen(
                 .padding(24.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Create account", style = MaterialTheme.typography.headlineMedium)
-
+            Text(title, style = MaterialTheme.typography.headlineMedium)
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
                 label = { Text("Email") },
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
             )
-
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
                 label = { Text("Password") },
                 visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
             )
-
             Button(
                 onClick = {
-                    viewModel.register(
-                        email = email,
-                        password = password,
-                        onSuccess = { token ->
-                            sessionManager.saveToken(token)
-                            status = "Account created successfully"
-                            navController.navigate("devices") {
-                                popUpTo("welcome") { inclusive = true }
-                            }
-                        },
-                        onError = { message -> status = message }
+                    onSubmit(
+                        email,
+                        password,
+                        { token -> onAuthenticated(token) },
+                        { message -> status = message },
                     )
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 20.dp)
-            ) {
-                Text("Register")
-            }
-
+                    .padding(top = 20.dp),
+            ) { Text(actionLabel) }
             if (status.isNotBlank()) {
-                Text(text = status, modifier = Modifier.padding(top = 16.dp))
+                Text(status, modifier = Modifier.padding(top = 16.dp))
             }
-
             Button(
                 onClick = { navController.popBackStack() },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 12.dp)
-            ) {
-                Text("Back")
-            }
+                    .padding(top = 12.dp),
+            ) { Text("Back") }
         }
     }
 }
 
 @Composable
-fun LoginScreen(
-    navController: NavHostController,
-    sessionManager: SessionManager
+private fun rememberAuthRegistration(
+    email: String,
+    password: String,
+    onSuccess: (String) -> Unit,
+    onError: (String) -> Unit,
 ) {
     val viewModel = remember { AuthViewModel() }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("") }
-
-    Scaffold { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(24.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text("Login", style = MaterialTheme.typography.headlineMedium)
-
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = { Text("Email") },
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
-            )
-
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Password") },
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-            )
-
-            Button(
-                onClick = {
-                    viewModel.login(
-                        email = email,
-                        password = password,
-                        onSuccess = { token ->
-                            sessionManager.saveToken(token)
-                            status = "Login successful"
-                            navController.navigate("devices") {
-                                popUpTo("welcome") { inclusive = true }
-                            }
-                        },
-                        onError = { message -> status = message }
-                    )
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 20.dp)
-            ) {
-                Text("Login")
-            }
-
-            if (status.isNotBlank()) {
-                Text(text = status, modifier = Modifier.padding(top = 16.dp))
-            }
-
-            Button(
-                onClick = { navController.popBackStack() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp)
-            ) {
-                Text("Back")
-            }
-        }
-    }
+    viewModel.register(email, password, onSuccess, onError)
 }
 
 @Composable
-fun DeviceListScreen(
+private fun rememberAuthLogin(
+    email: String,
+    password: String,
+    onSuccess: (String) -> Unit,
+    onError: (String) -> Unit,
+) {
+    val viewModel = remember { AuthViewModel() }
+    viewModel.login(email, password, onSuccess, onError)
+}
+
+@Composable
+private fun DeviceManagementScreen(
     navController: NavHostController,
-    sessionManager: SessionManager
+    sessionManager: SessionManager,
 ) {
     val service = remember { RetrofitClient.create().create(AuthApiService::class.java) }
+    val scope = rememberCoroutineScope()
+    val authHeader = sessionManager.authHeader()
     var devices by remember { mutableStateOf<List<DeviceResponse>>(emptyList()) }
-    var status by remember { mutableStateOf("") }
     var deviceName by remember { mutableStateOf("") }
     var deviceToken by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
-    val authHeader = sessionManager.authHeader() ?: ""
+    var status by remember { mutableStateOf("") }
 
     fun loadDevices() {
-        if (authHeader.isBlank()) {
-            status = "No active session"
+        if (authHeader.isNullOrBlank()) {
+            status = "Your session has expired. Please log in again."
             return
         }
-
         scope.launch {
-            try {
-                devices = service.getDevices(authHeader)
-                status = "Loaded ${devices.size} device(s)"
-            } catch (e: Exception) {
-                status = e.localizedMessage ?: "Could not load devices"
-            }
+            runCatching { service.getDevices(authHeader) }
+                .onSuccess { devices = it; status = "Loaded ${it.size} device(s)" }
+                .onFailure { status = it.localizedMessage ?: "Could not load devices" }
         }
     }
 
-    // Load devices on screen start.
-    scope.launch {
-        try {
-            if (authHeader.isNotBlank()) {
-                devices = service.getDevices(authHeader)
-            }
-        } catch (e: Exception) {
-            status = e.localizedMessage ?: "Could not load devices"
-        }
-    }
+    LaunchedEffect(authHeader) { loadDevices() }
 
     Scaffold { padding ->
         Column(
@@ -303,99 +250,82 @@ fun DeviceListScreen(
                 .padding(padding)
                 .padding(24.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.Top,
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text("My devices", style = MaterialTheme.typography.headlineMedium)
-
             OutlinedTextField(
                 value = deviceName,
                 onValueChange = { deviceName = it },
                 label = { Text("Device name") },
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
             )
-
             OutlinedTextField(
                 value = deviceToken,
                 onValueChange = { deviceToken = it },
                 label = { Text("Device token") },
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
             )
-
             Button(
                 onClick = {
-                    if (authHeader.isBlank()) {
-                        status = "Please login again"
-                        return@Button
-                    }
-
-                    scope.launch {
-                        try {
-                            val created = service.createDevice(
-                                authHeader,
-                                DeviceCreateRequest(
-                                    name = deviceName,
-                                    platform = "android",
-                                    device_token = deviceToken
+                    if (authHeader.isNullOrBlank() || deviceName.isBlank() || deviceToken.isBlank()) {
+                        status = "Device name and token are required"
+                    } else {
+                        scope.launch {
+                            runCatching {
+                                service.createDevice(
+                                    authHeader,
+                                    DeviceCreateRequest(deviceName.trim(), "android", deviceToken.trim()),
                                 )
-                            )
-                            status = "Device created: ${created.name}"
-                            loadDevices()
-                        } catch (e: Exception) {
-                            status = e.localizedMessage ?: "Device creation failed"
+                            }.onSuccess {
+                                deviceName = ""
+                                deviceToken = ""
+                                status = "Device registered"
+                                loadDevices()
+                            }.onFailure { status = it.localizedMessage ?: "Device registration failed" }
                         }
                     }
                 },
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-            ) {
-                Text("Register device")
-            }
-
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+            ) { Text("Register device") }
             Button(
                 onClick = {
                     sessionManager.clearToken()
-                    navController.navigate("welcome") {
-                        popUpTo("devices") { inclusive = true }
-                    }
+                    navController.navigate("welcome") { popUpTo("devices") { inclusive = true } }
                 },
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-            ) {
-                Text("Logout")
-            }
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+            ) { Text("Logout") }
+            if (status.isNotBlank()) Text(status, modifier = Modifier.padding(top = 16.dp))
 
-            if (status.isNotBlank()) {
-                Text(text = status, modifier = Modifier.padding(top = 16.dp))
-            }
-
-            if (devices.isNotEmpty()) {
-                devices.forEach { device ->
-                    Column(
+            devices.forEach { device ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                ) {
+                    Text("${device.name} (${device.platform})")
+                    Text("Lost: ${device.is_lost}")
+                    Button(
+                        onClick = {
+                            if (!authHeader.isNullOrBlank()) {
+                                scope.launch {
+                                    runCatching { service.markDeviceLost(authHeader, device.id) }
+                                        .onSuccess { status = "Device marked as lost"; loadDevices() }
+                                        .onFailure { status = it.localizedMessage ?: "Could not mark device as lost" }
+                                }
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 12.dp)
-                    ) {
-                        Text("Name: ${device.name}")
-                        Text("Platform: ${device.platform}")
-                        Text("Token: ${device.device_token}")
-                        Text("Lost: ${device.is_lost}")
-
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    try {
-                                        service.markDeviceLost(authHeader, device.id)
-                                        status = "Device marked as lost"
-                                        loadDevices()
-                                    } catch (e: Exception) {
-                                        status = e.localizedMessage ?: "Device mark-lost failed"
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                        ) {
-                            Text("Mark lost")
-                        }
-                    }
+                            .padding(top = 8.dp),
+                    ) { Text("Mark lost") }
                 }
             }
         }
