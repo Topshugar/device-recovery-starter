@@ -34,12 +34,9 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-    private lateinit var sessionManager: SessionManager
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        sessionManager = SessionManager(applicationContext)
-
+        val sessionManager = SessionManager(applicationContext)
         setContent {
             MaterialTheme {
                 DeviceRecoveryApp(sessionManager)
@@ -55,8 +52,8 @@ fun DeviceRecoveryApp(sessionManager: SessionManager) {
 
     NavHost(navController = navController, startDestination = startDestination) {
         composable("welcome") { WelcomeScreen(navController) }
-        composable("register") { RegisterScreen(navController, sessionManager) }
-        composable("login") { LoginScreen(navController, sessionManager) }
+        composable("register") { AuthScreen(navController, sessionManager, isRegistration = true) }
+        composable("login") { AuthScreen(navController, sessionManager, isRegistration = false) }
         composable("devices") { DeviceManagementScreen(navController, sessionManager) }
     }
 }
@@ -94,48 +91,12 @@ private fun WelcomeScreen(navController: NavHostController) {
 }
 
 @Composable
-private fun RegisterScreen(navController: NavHostController, sessionManager: SessionManager) {
-    AuthScreen(
-        title = "Create account",
-        actionLabel = "Register",
-        viewModel = remember { AuthViewModel() },
-        onSubmit = { email, password, onSuccess, onError ->
-            rememberAuthRegistration(email, password, onSuccess, onError)
-        },
-        onAuthenticated = { token ->
-            sessionManager.saveToken(token)
-            navController.navigate("devices") { popUpTo("welcome") { inclusive = true } }
-        },
-        navController = navController,
-    )
-}
-
-@Composable
-private fun LoginScreen(navController: NavHostController, sessionManager: SessionManager) {
-    AuthScreen(
-        title = "Login",
-        actionLabel = "Login",
-        viewModel = remember { AuthViewModel() },
-        onSubmit = { email, password, onSuccess, onError ->
-            rememberAuthLogin(email, password, onSuccess, onError)
-        },
-        onAuthenticated = { token ->
-            sessionManager.saveToken(token)
-            navController.navigate("devices") { popUpTo("welcome") { inclusive = true } }
-        },
-        navController = navController,
-    )
-}
-
-@Composable
 private fun AuthScreen(
-    title: String,
-    actionLabel: String,
-    viewModel: AuthViewModel,
-    onSubmit: (@Composable (String, String, (String) -> Unit, (String) -> Unit) -> Unit),
-    onAuthenticated: (String) -> Unit,
     navController: NavHostController,
+    sessionManager: SessionManager,
+    isRegistration: Boolean,
 ) {
+    val viewModel = remember { AuthViewModel() }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
@@ -150,7 +111,10 @@ private fun AuthScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(title, style = MaterialTheme.typography.headlineMedium)
+            Text(
+                if (isRegistration) "Create account" else "Login",
+                style = MaterialTheme.typography.headlineMedium,
+            )
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
@@ -170,17 +134,23 @@ private fun AuthScreen(
             )
             Button(
                 onClick = {
-                    onSubmit(
-                        email,
-                        password,
-                        { token -> onAuthenticated(token) },
-                        { message -> status = message },
-                    )
+                    val onSuccess: (String) -> Unit = { token ->
+                        sessionManager.saveToken(token)
+                        navController.navigate("devices") {
+                            popUpTo("welcome") { inclusive = true }
+                        }
+                    }
+                    val onError: (String) -> Unit = { message -> status = message }
+                    if (isRegistration) {
+                        viewModel.register(email, password, onSuccess, onError)
+                    } else {
+                        viewModel.login(email, password, onSuccess, onError)
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 20.dp),
-            ) { Text(actionLabel) }
+            ) { Text(if (isRegistration) "Register" else "Login") }
             if (status.isNotBlank()) {
                 Text(status, modifier = Modifier.padding(top = 16.dp))
             }
@@ -192,28 +162,6 @@ private fun AuthScreen(
             ) { Text("Back") }
         }
     }
-}
-
-@Composable
-private fun rememberAuthRegistration(
-    email: String,
-    password: String,
-    onSuccess: (String) -> Unit,
-    onError: (String) -> Unit,
-) {
-    val viewModel = remember { AuthViewModel() }
-    viewModel.register(email, password, onSuccess, onError)
-}
-
-@Composable
-private fun rememberAuthLogin(
-    email: String,
-    password: String,
-    onSuccess: (String) -> Unit,
-    onError: (String) -> Unit,
-) {
-    val viewModel = remember { AuthViewModel() }
-    viewModel.login(email, password, onSuccess, onError)
 }
 
 @Composable
@@ -236,12 +184,25 @@ private fun DeviceManagementScreen(
         }
         scope.launch {
             runCatching { service.getDevices(authHeader) }
-                .onSuccess { devices = it; status = "Loaded ${it.size} device(s)" }
+                .onSuccess {
+                    devices = it
+                    status = "Loaded ${it.size} device(s)"
+                }
                 .onFailure { status = it.localizedMessage ?: "Could not load devices" }
         }
     }
 
-    LaunchedEffect(authHeader) { loadDevices() }
+    LaunchedEffect(authHeader) {
+        if (authHeader.isNullOrBlank()) {
+            navController.navigate("welcome") {
+                popUpTo("devices") { inclusive = true }
+            }
+        } else {
+            runCatching { service.getDevices(authHeader) }
+                .onSuccess { devices = it }
+                .onFailure { status = it.localizedMessage ?: "Could not load devices" }
+        }
+    }
 
     Scaffold { padding ->
         Column(
@@ -285,7 +246,9 @@ private fun DeviceManagementScreen(
                                 deviceToken = ""
                                 status = "Device registered"
                                 loadDevices()
-                            }.onFailure { status = it.localizedMessage ?: "Device registration failed" }
+                            }.onFailure {
+                                status = it.localizedMessage ?: "Device registration failed"
+                            }
                         }
                     }
                 },
@@ -296,14 +259,17 @@ private fun DeviceManagementScreen(
             Button(
                 onClick = {
                     sessionManager.clearToken()
-                    navController.navigate("welcome") { popUpTo("devices") { inclusive = true } }
+                    navController.navigate("welcome") {
+                        popUpTo("devices") { inclusive = true }
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp),
             ) { Text("Logout") }
-            if (status.isNotBlank()) Text(status, modifier = Modifier.padding(top = 16.dp))
-
+            if (status.isNotBlank()) {
+                Text(status, modifier = Modifier.padding(top = 16.dp))
+            }
             devices.forEach { device ->
                 Column(
                     modifier = Modifier
@@ -317,8 +283,13 @@ private fun DeviceManagementScreen(
                             if (!authHeader.isNullOrBlank()) {
                                 scope.launch {
                                     runCatching { service.markDeviceLost(authHeader, device.id) }
-                                        .onSuccess { status = "Device marked as lost"; loadDevices() }
-                                        .onFailure { status = it.localizedMessage ?: "Could not mark device as lost" }
+                                        .onSuccess {
+                                            status = "Device marked as lost"
+                                            loadDevices()
+                                        }
+                                        .onFailure {
+                                            status = it.localizedMessage ?: "Could not mark device as lost"
+                                        }
                                 }
                             }
                         },
