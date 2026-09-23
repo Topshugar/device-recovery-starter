@@ -1,10 +1,11 @@
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class UserRegister(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=128)
 
 
 class UserLogin(BaseModel):
@@ -18,12 +19,21 @@ class Token(BaseModel):
 
 
 class DeviceCreate(BaseModel):
-    name: str
-    platform: str = "android"
-    device_token: str
+    name: str = Field(min_length=1, max_length=255)
+    platform: str = Field(default="android", min_length=1, max_length=50)
+    device_token: str = Field(min_length=1, max_length=255)
+
+    @field_validator("name", "platform", "device_token")
+    @classmethod
+    def reject_blank_values(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Value must not be blank")
+        return value
 
 
 class DeviceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     platform: str
@@ -32,22 +42,18 @@ class DeviceOut(BaseModel):
     is_lost: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
-
 
 class LocationEventCreate(BaseModel):
-    latitude: float
-    longitude: float
-    accuracy_meters: float = 0.0
-    source: str = "app"
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy_meters: float = Field(default=0.0, ge=0)
+    source: str = Field(default="app", min_length=1, max_length=50)
 
 
 class AuditLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     action: str
     metadata: str | None = None
     created_at: datetime
-
-    class Config:
-        from_attributes = True

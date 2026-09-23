@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -16,22 +17,30 @@ def list_devices(current_user=Depends(get_current_user), db: Session = Depends(g
 
 @router.post("/devices", response_model=DeviceOut)
 def create_device(payload: DeviceCreate, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
-    existing = db.query(Device).filter(Device.user_id == current_user.id, Device.device_token == payload.device_token).first()
+    existing = db.query(Device).filter(Device.device_token == payload.device_token).first()
     if existing:
-        raise HTTPException(status_code=400, detail="This device is already registered")
+        raise HTTPException(status_code=400, detail="This device token is already registered")
 
     device = Device(
         user_id=current_user.id,
-        name=payload.name,
-        platform=payload.platform,
-        device_token=payload.device_token,
+        name=payload.name.strip(),
+        platform=payload.platform.strip().lower(),
+        device_token=payload.device_token.strip(),
     )
     db.add(device)
-    db.commit()
+    try:
+        db.flush()
+        db.add(AuditLog(
+            user_id=current_user.id,
+            device_id=device.id,
+            action="register_device",
+            metadata_text=f"Device {device.name} registered",
+        ))
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="This device token is already registered") from exc
     db.refresh(device)
-
-    db.add(AuditLog(user_id=current_user.id, device_id=device.id, action="register_device", metadata=f"Device {device.name} registered"))
-    db.commit()
     return device
 
 
@@ -41,16 +50,19 @@ def upload_location(device_id: int, payload: LocationEventCreate, current_user=D
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    event = LocationEvent(
+    db.add(LocationEvent(
         device_id=device.id,
         latitude=payload.latitude,
         longitude=payload.longitude,
         accuracy_meters=payload.accuracy_meters,
         source=payload.source,
-    )
-    db.add(event)
-
-    db.add(AuditLog(user_id=current_user.id, device_id=device.id, action="location_update", metadata=f"{payload.latitude},{payload.longitude}"))
+    ))
+    db.add(AuditLog(
+        user_id=current_user.id,
+        device_id=device.id,
+        action="location_update",
+        metadata_text=f"{payload.latitude},{payload.longitude}",
+    ))
     db.commit()
     return {"message": "Location recorded"}
 
@@ -62,7 +74,12 @@ def mark_lost(device_id: int, current_user=Depends(get_current_user), db: Sessio
         raise HTTPException(status_code=404, detail="Device not found")
 
     device.is_lost = True
-    db.add(AuditLog(user_id=current_user.id, device_id=device.id, action="mark_lost", metadata="Owner marked device as lost"))
+    db.add(AuditLog(
+        user_id=current_user.id,
+        device_id=device.id,
+        action="mark_lost",
+        metadata_text="Owner marked device as lost",
+    ))
     db.commit()
     return {"message": "Device marked as lost"}
 

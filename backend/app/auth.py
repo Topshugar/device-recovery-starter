@@ -87,9 +87,18 @@ def get_me(current_user: User = Depends(get_current_user)):
 
 @router.get("/audit")
 def list_audit(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return (
+    logs = (
         db.query(AuditLog)
         .filter(AuditLog.user_id == current_user.id)
         .order_by(AuditLog.created_at.desc())
         .all()
     )
+    return [
+        {
+            "id": log.id,
+            "action": log.action,
+            "metadata": log.metadata_text,
+            "created_at": log.created_at,
+        }
+        for log in logs
+    ]
